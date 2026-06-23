@@ -20,28 +20,20 @@ def render_fahrzeug_kombinationen(plot_df):
     vorhandene_cols = [c for c in v_cols if c in plot_df.columns]
     
     if len(vorhandene_cols) >= 2:
-        # Kopie der Daten ziehen
-        df_vehicles = plot_df[vorhandene_cols].copy()
+        # Direkter Zugriff auf die Spalten (kein inline .str.upper() oder .strip() mehr nötig)
+        df_vehicles = plot_df[vorhandene_cols]
         
-        # Bereinigung: Alles in Großbuchstaben umwandeln und Whitespaces entfernen
-        for col in vorhandene_cols:
-            df_vehicles[col] = df_vehicles[col].astype(str).str.strip().str.upper()
-            
-        ungueltige_werte = ['UNSPECIFIED', 'UNKNOWN', 'NAN', '<NA>', 'NAT', 'NONE', '']
-        
-        # Kombinationen (Paare) über alle Spalten hinweg pro Zeile sammeln
         alle_paarungen = []
         
-        # Effiziente Schleife über die Zeilen (als Liste von Listen für maximale Performance)
+        # Schleife über die Zeilen als Liste für maximale Performance
         for row in df_vehicles.values.tolist():
-            # Nur echte, gültige Fahrzeugtypen filtern
-            gueltige_fahrzeuge = [v for v in row if v not in ungueltige_werte and pd.notna(v)]
+            # Da die Daten bereits sauber sind, filtern wir nur noch echte fehlende Werte (NaN/None) heraus
+            gueltige_fahrzeuge = [v for v in row if pd.notna(v) and v != '']
             
             # Wenn mindestens 2 Fahrzeuge beteiligt waren, bilden wir Paare
             if len(gueltige_fahrzeuge) >= 2:
-                # itertools.combinations baut automatisch alle Paare, z.B. bei 3 Autos: (A,B), (A,C), (B,C)
                 for paar in itertools.combinations(gueltige_fahrzeuge, 2):
-                    # Sortieren, damit "SEDAN + SUV" das gleiche ist wie "SUV + SEDAN" (Unabhängig von der Reihenfolge)
+                    # Sortieren für die Symmetrie (SEDAN+SUV == SUV+SEDAN)
                     alle_paarungen.append(sorted(paar))
         
         if not alle_paarungen:
@@ -51,42 +43,56 @@ def render_fahrzeug_kombinationen(plot_df):
         # DataFrame aus allen gefundenen Paaren erstellen
         df_paare = pd.DataFrame(alle_paarungen, columns=['Fahrzeug_A', 'Fahrzeug_B'])
         
-        # Die Top 10 der am häufigsten vorkommenden Fahrzeugtypen ermitteln (für eine übersichtliche Matrix)
-        top_10_typen = pd.concat([df_paare['Fahrzeug_A'], df_paare['Fahrzeug_B']]).value_counts().head(15).index.tolist()
+        # Alle einzigartigen Fahrzeugtypen aus den Paaren für das Multiselect ermitteln
+        alle_verfuegbaren_typen = sorted(list(set(df_paare['Fahrzeug_A'].unique()) | set(df_paare['Fahrzeug_B'].unique())))
         
-        # Nur Paarungen behalten, bei denen beide Fahrzeuge zu den Top 10 gehören
+        # Die Top 10 für die Standard-Vorauswahl bestimmen
+        top_10_default = pd.concat([df_paare['Fahrzeug_A'], df_paare['Fahrzeug_B']]).value_counts().head(10).index.tolist()
+        
+        # Multiselect-Box für den User
+        ausgewaehlte_typen = st.multiselect(
+            "📋 Zu analysierende Fahrzeugtypen auswählen:",
+            options=alle_verfuegbaren_typen,
+            default=top_10_default,
+            help="Füge Fahrzeuge hinzu oder entferne sie, um die Heatmap-Matrix anzupassen."
+        )
+        
+        # Absicherung: Mindestens 2 Typen für die Matrix
+        if len(ausgewaehlte_typen) < 2:
+            st.warning("⚠️ Bitte wähle mindestens 2 Fahrzeugtypen aus, um die Kombinationen-Matrix anzuzeigen.")
+            return
+
+        # Nur Paarungen behalten, bei denen beide Fahrzeuge ausgewählt wurden
         df_paare_filtered = df_paare[
-            df_paare['Fahrzeug_A'].isin(top_10_typen) & 
-            df_paare['Fahrzeug_B'].isin(top_10_typen)
+            df_paare['Fahrzeug_A'].isin(ausgewaehlte_typen) & 
+            df_paare['Fahrzeug_B'].isin(ausgewaehlte_typen)
         ]
         
         # Symmetrische Matrix mit Nullen vorbereiten
-        matrix = pd.DataFrame(0, index=top_10_typen, columns=top_10_typen)
+        matrix = pd.DataFrame(0, index=ausgewaehlte_typen, columns=ausgewaehlte_typen)
         
-        # Häufigkeiten zählen und in die Matrix eintragen
+        # Häufigkeiten zählen und eintragen
         counts = df_paare_filtered.groupby(['Fahrzeug_A', 'Fahrzeug_B']).size().reset_index(name='Anzahl')
         for _, row in counts.iterrows():
             v1, v2, anzahl = row['Fahrzeug_A'], row['Fahrzeug_B'], row['Anzahl']
-            matrix.loc[v1, v2] += anzahl
-            if v1 != v2:
-                matrix.loc[v2, v1] += anzahl # Symmetrisch spiegeln für bessere Lesbarkeit
+            if v1 in matrix.index and v2 in matrix.columns:
+                matrix.loc[v1, v2] += anzahl
+                if v1 != v2:
+                    matrix.loc[v2, v1] += anzahl
                 
         # --- PLOT ERSTELLEN (TRANSPARENT) ---
         fig, ax = plt.subplots(figsize=(10, 8), facecolor='none')
         ax.set_facecolor('none')
         
-        # Heatmap zeichnen (YlOrRd = Yellow-Orange-Red passt gut auf dunklen Hintergrund)
         sns.heatmap(matrix, annot=True, fmt="d", cmap="YlOrRd", linewidths=0.5, ax=ax)
         
-        # Design anpassen (Schriftfarben weiß für dein Theme)
         ax.tick_params(colors='white')
         plt.setp(ax.get_xticklabels(), color="white", rotation=45, ha='right')
         plt.setp(ax.get_yticklabels(), color="white")
         
-        # Anzeigen im Streamlit
         st.pyplot(fig, transparent=True)
         
-        st.info("💡 **Interpretationshilfe:** Die Diagonale (z. B. SEDAN vs. SEDAN) zeigt Unfälle, bei denen zwei Fahrzeuge des exakt selben Typs kollidiert sind. Sehr hohe Werte (wie Sedan vs. SUV) liegen natürlich auch daran, dass diese beiden Fahrzeugklassen generell am häufigsten in NYC unterwegs sind.")
+        st.info("💡 **Interpretationshilfe:** Die Diagonale (z. B. SEDAN vs. SEDAN) zeigt Unfälle, bei denen zwei Fahrzeuge des exakt selben Typs kollidiert sind.")
 
     else:
         st.warning("Die Fahrzeug-Spalten wurden im Datensatz nicht gefunden.")
