@@ -23,9 +23,13 @@ def reset_visualization_filters():
     st.session_state.v_hour = "Alle"
     st.session_state.v_borough = "Alle"
     st.session_state.v_factor = "Alle"
-    st.session_state.v_injured = 0
-    st.session_state.v_killed = 0
-    st.session_state.v_vehicles = "Alle"
+    # NEUE KEYS HIER EINTRAGEN / ANPASSEN:
+    if 'v_injured_range' in st.session_state:
+        del st.session_state.v_injured_range
+    if 'v_killed_range' in st.session_state:
+        del st.session_state.v_killed_range
+    if 'v_vehicles_range' in st.session_state:
+        del st.session_state.v_vehicles_range
     if 'v_sample_size' in st.session_state:
         del st.session_state.v_sample_size
 
@@ -124,42 +128,92 @@ elif st.session_state.aktives_tab == "Data visualization":
             else:
                 ursachen = ["Alle"]
             v_factor = st.selectbox("Haupt-Unfallursache (Factor 1):", ursachen, key='v_factor')
-            
+        
+        
         # Reihe 3: Schweregrad & Fahrzeuge
+        # =====================================================================
+        # 1. TEMPORÄRE VOR-FILTERUNG (Für dynamische Slider-Maxima)
+        # =====================================================================
+        pre_filtered_df = df.copy()
+        
+        if v_year != "Alle":
+            pre_filtered_df = pre_filtered_df[pre_filtered_df['CRASH DATE'].dt.year == int(v_year)]
+        if v_month != "Alle":
+            pre_filtered_df = pre_filtered_df[pre_filtered_df['CRASH DATE'].dt.month == int(v_month)]
+        if v_weekday != "Alle" and 'WEEKDAY' in pre_filtered_df.columns:
+            pre_filtered_df = pre_filtered_df[pre_filtered_df['WEEKDAY'] == v_weekday]
+        if v_hour != "Alle" and 'CRASH HOUR' in pre_filtered_df.columns:
+            pre_filtered_df = pre_filtered_df[pre_filtered_df['CRASH HOUR'] == int(v_hour)]
+        if v_borough != "Alle" and 'BOROUGH' in pre_filtered_df.columns:
+            pre_filtered_df = pre_filtered_df[pre_filtered_df['BOROUGH'] == v_borough]
+        if v_factor != "Alle" and 'CONTRIBUTING FACTOR VEHICLE 1' in pre_filtered_df.columns:
+            pre_filtered_df = pre_filtered_df[pre_filtered_df['CONTRIBUTING FACTOR VEHICLE 1'] == v_factor]
+
+        # Dynamische Maxima aus den vor-gefilterten Daten ermitteln
+        dynamic_max_inj = int(pre_filtered_df['NUMBER OF PEOPLE INJURED'].max()) if 'NUMBER OF PEOPLE INJURED' in pre_filtered_df.columns and not pre_filtered_df.empty else 0
+        dynamic_max_kil = int(pre_filtered_df['NUMBER OF PEOPLE KILLED'].max()) if 'NUMBER OF PEOPLE KILLED' in pre_filtered_df.columns and not pre_filtered_df.empty else 0
+        
+        # Wichtig: Mindestens 1 erzwingen (Streamlit Slider crashen, wenn min_value == max_value == 0)
+        max_inj = max(1, dynamic_max_inj)
+        max_kil = max(1, dynamic_max_kil)
+
+        # =====================================================================
+        # 2. SESSION STATE ABSICHERN (Verhindert den "Out of Bounds"-Crash!)
+        # =====================================================================
+        if 'v_injured_range' in st.session_state:
+            low, high = st.session_state.v_injured_range
+            if high > max_inj: high = max_inj
+            if low > max_inj: low = max_inj
+            st.session_state.v_injured_range = (low, high)
+        else:
+            st.session_state.v_injured_range = (0, max_inj)
+
+        if 'v_killed_range' in st.session_state:
+            low, high = st.session_state.v_killed_range
+            if high > max_kil: high = max_kil
+            if low > max_kil: low = max_kil
+            st.session_state.v_killed_range = (low, high)
+        else:
+            st.session_state.v_killed_range = (0, max_kil)
+
+        # =====================================================================
+        # 3. REIHE 3 ZEICHNEN (Slider greifen sich den Wert direkt aus dem State)
+        # =====================================================================
         col_s1, col_s2, col_s3 = st.columns(3)
         
         with col_s1:
-            max_inj = int(df['NUMBER OF PERSONS INJURED'].max()) if 'NUMBER OF PERSONS INJURED' in df.columns else 10
-            v_injured = st.slider("Mindestens Verletzte Personen:", 0, max_inj, key='v_injured')
+            # HINWEIS: value= wurde entfernt. Streamlit nutzt automatisch st.session_state.v_injured_range
+            v_injured = st.slider(
+                "Verletzte Personen (von - bis):", 
+                0, max_inj, 
+                key='v_injured_range'
+            )
             
         with col_s2:
-            max_kil = int(df['NUMBER OF PERSONS KILLED'].max()) if 'NUMBER OF PERSONS KILLED' in df.columns else 10
-            v_killed = st.slider("Mindestens Getötete Personen:", 0, max_kil, key='v_killed')
+            # HINWEIS: value= wurde entfernt. Streamlit nutzt automatisch st.session_state.v_killed_range
+            v_killed = st.slider(
+                "Getötete Personen (von - bis):", 
+                0, max_kil, 
+                key='v_killed_range'
+            )
             
         with col_s3:
-            v_vehicles = st.selectbox("Anzahl beteiligter Fahrzeuge:", ["Alle", "1", "2", "3", "4", "5+"], key='v_vehicles')
+            v_vehicles = st.selectbox(
+                "Anzahl beteiligter Fahrzeuge:", 
+                ["Alle", "1", "2", "3", "4", "5+"], 
+                key='v_vehicles'
+            )
 
-        # ---------------------------------------------------------------------
-        # LOGISCHE FILTERUNG DIREKT ANWENDEN, UM DAS SLIDER-MAXIMUM ZU BERECHNEN
-        # ---------------------------------------------------------------------
-        filtered_df = df.copy()
+        # =====================================================================
+        # 4. FINALE FILTERUNG (Jetzt auch inklusive der Slider-Werte)
+        # =====================================================================
+        filtered_df = pre_filtered_df.copy()
         
-        if v_year != "Alle":
-            filtered_df = filtered_df[filtered_df['CRASH DATE'].dt.year == int(v_year)]
-        if v_month != "Alle":
-            filtered_df = filtered_df[filtered_df['CRASH DATE'].dt.month == int(v_month)]
-        if v_weekday != "Alle" and 'WEEKDAY' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['WEEKDAY'] == v_weekday]
-        if v_hour != "Alle" and 'CRASH HOUR' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['CRASH HOUR'] == int(v_hour)]
-        if v_borough != "Alle" and 'BOROUGH' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['BOROUGH'] == v_borough]
-        if v_factor != "Alle" and 'CONTRIBUTING FACTOR VEHICLE 1' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['CONTRIBUTING FACTOR VEHICLE 1'] == v_factor]
-        if 'NUMBER OF PERSONS INJURED' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['NUMBER OF PERSONS INJURED'] >= v_injured]
-        if 'NUMBER OF PERSONS KILLED' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['NUMBER OF PERSONS KILLED'] >= v_killed]
+        if 'NUMBER OF PEOPLE INJURED' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['NUMBER OF PEOPLE INJURED'].between(v_injured[0], v_injured[1])]
+            
+        if 'NUMBER OF PEOPLE KILLED' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['NUMBER OF PEOPLE KILLED'].between(v_killed[0], v_killed[1])]
             
         v_cols = ['VEHICLE TYPE CODE 1', 'VEHICLE TYPE CODE 2', 'VEHICLE TYPE CODE 3', 'VEHICLE TYPE CODE 4', 'VEHICLE TYPE CODE 5']
         existierende_v_cols = [c for c in v_cols if c in filtered_df.columns]
