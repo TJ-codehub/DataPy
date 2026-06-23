@@ -1,0 +1,21 @@
+# === Große Datensätze (wichtig!) ===
+NYC_Collisions_Clean.csv
+*.csv
+*.xlsx
+*.zip
+
+# === Jupyter Notebooks ===
+.ipynb_checkpoints/
+
+# === Python & Virtuelle Umgebungen ===
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+
+# === Betriebssysteme (Mac/Windows) ===
+.DS_Store
+Thumbs.db
